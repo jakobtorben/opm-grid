@@ -252,6 +252,24 @@ public:
         assert(count == subset_.size());
     }
 
+    /// Construct a view with pre-computed owned (interior) and overlap seeds.
+    ///
+    /// This constructor does NOT auto-compute overlap from face-neighbors.
+    /// Instead, the caller provides both the owned and overlap entity seeds
+    /// explicitly. The first owned_seeds.size() entities are considered Interior,
+    /// the rest are considered Overlap.
+    SubGridPart(const Grid& grid,
+                std::vector<typename Codim<0>::Entity::EntitySeed>&& owned_seeds,
+                std::vector<typename Codim<0>::Entity::EntitySeed>&& overlap_seeds)
+        : grid_(&grid)
+        , subset_(std::move(owned_seeds))
+        , num_owned_(subset_.size())
+    {
+        subset_.insert(subset_.end(),
+                       std::make_move_iterator(overlap_seeds.begin()),
+                       std::make_move_iterator(overlap_seeds.end()));
+    }
+
     /** \brief obtain a const reference to the underlying hierarchic grid */
     const Grid& grid() const
     {

@@ -345,7 +345,7 @@ CpGrid::scatterGrid(EdgeWeightMethod method,
             // Partitioning given externally
             std::tie(computedCellPart, wells_on_proc, exportList, importList, wellConnections) =
                 cpgrid::createListsFromParts(*this, wells, possibleFutureConnections, /* transmissibilities = */ nullptr, input_cell_part,
-                                              /* allowDistributedWells = */ true, /* gridAndWells = */ nullptr, level);
+                                              allowDistributedWells, /* gridAndWells = */ nullptr, level);
         }
         else
         {

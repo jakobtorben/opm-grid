@@ -989,7 +989,8 @@ namespace Dune
                     const std::vector<cpgrid::OpmWellType> * wells,
                     const std::unordered_map<std::string, std::set<int>>& possibleFutureConnections = {},
                     bool ownersFirst=false,
-                    bool addCornerCells=false, int overlapLayers=1)
+                    bool addCornerCells=false, int overlapLayers=1,
+                    bool allowDistributedWells=false)
         {
             using std::get;
             auto ret = scatterGrid(defaultTransEdgeWgt,  ownersFirst, wells,
@@ -998,7 +999,7 @@ namespace Dune
                                    /* transmissibilities = */ {},
                                    addCornerCells, overlapLayers, /* partitionMethod =*/ Dune::PartitionMethod::simple,
                                    /* imbalanceTol (ignored) = */ 0.0,
-                                   /* allowDistributedWells = */ true, parts, /* level = */ 0);
+                                   allowDistributedWells, parts, /* level = */ 0);
             using std::get;
             if (get<0>(ret))
             {

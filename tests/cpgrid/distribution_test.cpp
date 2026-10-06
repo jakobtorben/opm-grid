@@ -7,6 +7,12 @@
 #include <boost/test/unit_test.hpp>
 
 #include <opm/grid/CpGrid.hpp>
+#include <opm/grid/common/WellConnections.hpp>
+#include <opm/grid/utility/OpmWellType.hpp>
+
+#include <opm/input/eclipse/Schedule/Well/Connection.hpp>
+#include <opm/input/eclipse/Schedule/Well/Well.hpp>
+#include <opm/input/eclipse/Schedule/Well/WellConnections.hpp>
 
 
 // Warning suppression for Dune includes.
@@ -27,7 +33,83 @@
 #include <opm/grid/utility/platform_dependent/reenable_warnings.h>
 #include <dune/grid/common/mcmgmapper.hh>
 
+#include <algorithm>
+#include <memory>
 #include <numeric>
+
+namespace {
+
+Opm::Connection createConnection(int i, int j, int k, int global_index)
+{
+    return Opm::Connection(i, j, k,
+                           global_index,
+                           0,
+                           Opm::Connection::State::OPEN,
+                           Opm::Connection::Direction::Z,
+                           Opm::Connection::CTFKind::DeckValue,
+                           0,
+                           0.0,
+                           Opm::Connection::CTFProperties(),
+                           0,
+                           false);
+}
+
+Dune::cpgrid::OpmWellType createWell(const std::string& name)
+{
+    using namespace Opm;
+    return Dune::cpgrid::OpmWellType(name, name, 0, 0, 0, 0, 0.0, WellType(),
+                                     Well::ProducerCMode(), Connection::Order::TRACK,
+                                     UnitSystem::newMETRIC(),
+                                     0.0, 0.0, false, false, 0, Well::GasInflowEquation());
+}
+
+std::vector<Dune::cpgrid::OpmWellType>
+createWellsWithConnections(const std::vector<std::pair<std::string, std::vector<int>>>& well_specs)
+{
+    std::vector<Dune::cpgrid::OpmWellType> wells;
+    for (const auto& [well_name, cell_indices] : well_specs) {
+        auto well_conn = std::make_shared<Opm::WellConnections>();
+        for (const int idx : cell_indices) {
+            well_conn->add(createConnection(idx, 0, 0, idx));
+        }
+        auto well = createWell(well_name);
+        well.updateConnections(well_conn, true);
+        wells.push_back(well);
+    }
+    return wells;
+}
+
+class NullLoadBalanceDataHandle
+{
+public:
+    using DataType = int;
+
+    bool fixedSize(int, int)
+    {
+        return true;
+    }
+
+    template<class T>
+    std::size_t size(const T&)
+    {
+        return 0;
+    }
+
+    template<class B, class T>
+    void gather(B&, const T&)
+    {}
+
+    template<class B, class T>
+    void scatter(B&, const T&, std::size_t)
+    {}
+
+    bool contains(int, int)
+    {
+        return false;
+    }
+};
+
+} // namespace
 
 #if defined(HAVE_ZOLTAN) && defined(HAVE_METIS)
 const int partition_methods[] = {1,2};
@@ -658,6 +740,64 @@ BOOST_AUTO_TEST_CASE(PartitionTestWithCorners)
             BOOST_CHECK(points_per_part_type[Dune::OverlapEntity] == 6);
             BOOST_CHECK(points_per_part_type[Dune::FrontEntity] == 16);
         }
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    if (size > 2)
+    {
+        MPI_Comm_free(&twocom);
+    }
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(PartitionWithWellsRespectsAllowDistributedWells)
+{
+#if HAVE_MPI
+    int size, rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm twocom = MPI_COMM_WORLD;
+    if (size == 1)
+        return;
+    if (size > 2)
+    {
+        MPI_Comm_split(MPI_COMM_WORLD, rank < 2, rank, &twocom);
+    }
+    if (rank < 2)
+    {
+        const std::array<int, 3> dims = {{4, 1, 1}};
+        const std::array<double, 3> sizes = {{1.0, 1.0, 1.0}};
+        const std::vector<int> parts = {0, 0, 1, 1};
+        const auto wells = createWellsWithConnections({{"TESTW1", {1, 2}}});
+
+        auto countRanksWithWell = [&](const bool allowDistributedWells)
+        {
+            Dune::CpGrid grid(twocom);
+            NullLoadBalanceDataHandle handle;
+            grid.createCartesian(dims, sizes);
+
+            const auto [didLoadBalance, parallelWells] =
+                grid.loadBalance(handle, parts, &wells, {},
+                                 /* ownersFirst = */ false,
+                                 /* addCornerCells = */ false,
+                                 /* overlapLayers = */ 1,
+                                 allowDistributedWells);
+
+            BOOST_CHECK(didLoadBalance);
+
+            const auto it = std::find_if(parallelWells.begin(), parallelWells.end(),
+                                         [](const auto& wellInfo)
+                                         { return wellInfo.first == "TESTW1"; });
+            BOOST_REQUIRE(it != parallelWells.end());
+
+            int localHasWell = it->second ? 1 : 0;
+            int globalHasWell = 0;
+            MPI_Allreduce(&localHasWell, &globalHasWell, 1, MPI_INT, MPI_SUM, twocom);
+            return globalHasWell;
+        };
+
+        BOOST_CHECK_EQUAL(countRanksWithWell(false), 1);
+        BOOST_CHECK_EQUAL(countRanksWithWell(true), 2);
     }
     MPI_Barrier(MPI_COMM_WORLD);
 
